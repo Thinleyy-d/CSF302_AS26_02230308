@@ -12,9 +12,6 @@
 | `search.py` | Q3 — menu-driven Binary vs Ternary search with comparison counts |
 | `*.png` | Graphs produced by the programs |
 
-Run any file with `python <file>.py` (Python 3). `matplotlib` is only needed for
-the graphs; the programs still run without it. The analysis/conclusion of each
-program is also written as a comment at the bottom of its `.py` file.
 
 ## Objective
 
