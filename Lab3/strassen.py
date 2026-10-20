@@ -14,30 +14,43 @@ to:
     T(n) = 7T(n/2) + O(n^2)   ->  O(n^log2(7)) ~= O(n^2.807)
 
 This file also contains the code that runs both algorithms on
-matrices of increasing size (powers of 2), checks that their
-results match, times them, and plots the results.
+matrices (random or typed in manually), checks that their results
+match, counts the steps (multiplications / additions), times them,
+and prints the step/frequency count table + a graph.
+
+Needs matrix_mult.py in the same folder.
+Run:  python strassen.py
 """
 
 import time
 import random
-import matplotlib
-matplotlib.use("Agg")  # so it works without a display
-import matplotlib.pyplot as plt
 
-from matrix_mult import multiply_traditional, generate_matrix
+# The graph is a bonus: the program still works if matplotlib is missing.
+try:
+    import matplotlib
+    matplotlib.use("Agg")  # so it works without a display
+    import matplotlib.pyplot as plt
+    HAVE_PLOT = True
+except ImportError:
+    HAVE_PLOT = False
+
+from matrix_mult import (multiply_traditional, generate_matrix,
+                         get_matrices, print_matrix, new_counter)
 
 
 # ---------- helper functions used by Strassen ----------
 
-def add(A, B):
-    """Elementwise matrix addition."""
+def add(A, B, counter):
+    """Elementwise matrix addition (counts n*n additions)."""
     n = len(A)
+    counter["add"] += n * n
     return [[A[i][j] + B[i][j] for j in range(n)] for i in range(n)]
 
 
-def subtract(A, B):
-    """Elementwise matrix subtraction."""
+def subtract(A, B, counter):
+    """Elementwise matrix subtraction (counted as n*n additions)."""
     n = len(A)
+    counter["add"] += n * n
     return [[A[i][j] - B[i][j] for j in range(n)] for i in range(n)]
 
 
@@ -60,33 +73,40 @@ def combine_quadrants(C11, C12, C21, C22):
     return top + bottom
 
 
-def multiply_strassen(A, B):
+def multiply_strassen(A, B, counter=None):
     """
     Multiply two n x n matrices (n must be a power of 2) using
     Strassen's algorithm.
+
+    counter (optional) is a dictionary {"mult": .., "add": ..} that is
+    updated with the number of steps (step/frequency count).
     """
+    if counter is None:
+        counter = new_counter()
+
     n = len(A)
 
     # Base case: 1x1 "matrix" multiplication is just a number product
     if n == 1:
+        counter["mult"] += 1
         return [[A[0][0] * B[0][0]]]
 
     A11, A12, A21, A22 = split_matrix(A)
     B11, B12, B21, B22 = split_matrix(B)
 
     # The 7 products Strassen discovered (instead of the naive 8)
-    M1 = multiply_strassen(add(A11, A22), add(B11, B22))
-    M2 = multiply_strassen(add(A21, A22), B11)
-    M3 = multiply_strassen(A11, subtract(B12, B22))
-    M4 = multiply_strassen(A22, subtract(B21, B11))
-    M5 = multiply_strassen(add(A11, A12), B22)
-    M6 = multiply_strassen(subtract(A21, A11), add(B11, B12))
-    M7 = multiply_strassen(subtract(A12, A22), add(B21, B22))
+    M1 = multiply_strassen(add(A11, A22, counter), add(B11, B22, counter), counter)
+    M2 = multiply_strassen(add(A21, A22, counter), B11, counter)
+    M3 = multiply_strassen(A11, subtract(B12, B22, counter), counter)
+    M4 = multiply_strassen(A22, subtract(B21, B11, counter), counter)
+    M5 = multiply_strassen(add(A11, A12, counter), B22, counter)
+    M6 = multiply_strassen(subtract(A21, A11, counter), add(B11, B12, counter), counter)
+    M7 = multiply_strassen(subtract(A12, A22, counter), add(B21, B22, counter), counter)
 
-    C11 = add(subtract(add(M1, M4), M5), M7)
-    C12 = add(M3, M5)
-    C21 = add(M2, M4)
-    C22 = add(subtract(add(M1, M3), M2), M6)
+    C11 = add(subtract(add(M1, M4, counter), M5, counter), M7, counter)
+    C12 = add(M3, M5, counter)
+    C21 = add(M2, M4, counter)
+    C22 = add(subtract(add(M1, M3, counter), M2, counter), M6, counter)
 
     return combine_quadrants(C11, C12, C21, C22)
 
@@ -98,82 +118,167 @@ def matrices_equal(A, B):
     return A == B
 
 
+def compare_one_pair():
+    """Menu option 1: multiply one pair of matrices (random or manual) with both methods."""
+    A, B = get_matrices()
+    print_matrix(A, "Matrix A")
+    print_matrix(B, "Matrix B")
+
+    trad_counter = new_counter()
+    t0 = time.perf_counter()
+    C_trad = multiply_traditional(A, B, trad_counter)
+    t1 = time.perf_counter()
+
+    str_counter = new_counter()
+    C_strassen = multiply_strassen(A, B, str_counter)
+    t2 = time.perf_counter()
+
+    print_matrix(C_trad, "Result (Traditional)")
+    print_matrix(C_strassen, "Result (Strassen)")
+
+    if matrices_equal(C_trad, C_strassen):
+        print("VERIFIED: both methods give the SAME result matrix.\n")
+    else:
+        print("ERROR: the two results are different!\n")
+
+    print("Step/frequency count:")
+    print(f"  Traditional -> mults: {trad_counter['mult']}, adds: {trad_counter['add']}, "
+          f"time: {t1 - t0:.6f}s")
+    print(f"  Strassen    -> mults: {str_counter['mult']}, adds: {str_counter['add']}, "
+          f"time: {t2 - t1:.6f}s\n")
+
+
 def run_comparison(sizes):
     """
     For every size n in `sizes` (each a power of 2):
       1. Generate two random n x n matrices
-      2. Multiply with both algorithms, timing each
+      2. Multiply with both algorithms, counting steps and timing each
       3. Verify the results match
-      4. Record the timings
-    Returns a list of dict rows for the report table.
+      4. Record everything
+    Prints the step/frequency count table and returns the rows.
     """
     results = []
+
+    print("-" * 100)
+    print(f"{'n':>4} | {'Trad mults':>11} {'Trad adds':>11} | "
+          f"{'Str mults':>10} {'Str adds':>10} | "
+          f"{'Trad time(s)':>12} {'Str time(s)':>12} | Match")
+    print("-" * 100)
+
     for n in sizes:
         A = generate_matrix(n)
         B = generate_matrix(n)
 
+        trad_counter = new_counter()
         t0 = time.perf_counter()
-        C_trad = multiply_traditional(A, B)
+        C_trad = multiply_traditional(A, B, trad_counter)
         t1 = time.perf_counter()
-        C_strassen = multiply_strassen(A, B)
+
+        str_counter = new_counter()
+        C_strassen = multiply_strassen(A, B, str_counter)
         t2 = time.perf_counter()
 
-        trad_time = t1 - t0
-        strassen_time = t2 - t1
         match = matrices_equal(C_trad, C_strassen)
 
         results.append({
             "n": n,
-            "traditional_time_sec": trad_time,
-            "strassen_time_sec": strassen_time,
+            "trad_mult": trad_counter["mult"],
+            "trad_add": trad_counter["add"],
+            "str_mult": str_counter["mult"],
+            "str_add": str_counter["add"],
+            "traditional_time_sec": t1 - t0,
+            "strassen_time_sec": t2 - t1,
             "results_match": match,
         })
 
-        print(f"n={n:4d} | Traditional: {trad_time:10.6f}s | "
-              f"Strassen: {strassen_time:10.6f}s | Match: {match}")
+        print(f"{n:>4} | {trad_counter['mult']:>11} {trad_counter['add']:>11} | "
+              f"{str_counter['mult']:>10} {str_counter['add']:>10} | "
+              f"{t1 - t0:>12.6f} {t2 - t1:>12.6f} | {match}")
 
+    print("-" * 100)
     return results
 
 
 def plot_results(results, filename="matrix_comparison.png"):
-    """Plot running time vs matrix size for both algorithms."""
-    ns = [r["n"] for r in results]
-    trad = [r["traditional_time_sec"] for r in results]
-    strassen = [r["strassen_time_sec"] for r in results]
+    """Plot multiplications (left) and running time (right) vs matrix size."""
+    if not HAVE_PLOT:
+        print("matplotlib is not installed, so the graph was skipped.")
+        return
 
-    plt.figure(figsize=(7, 5))
-    plt.plot(ns, trad, marker="o", label="Traditional O(n^3)")
-    plt.plot(ns, strassen, marker="s", label="Strassen O(n^2.81)")
+    ns = [r["n"] for r in results]
+
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
+    plt.plot(ns, [r["trad_mult"] for r in results], marker="o", label="Traditional O(n^3)")
+    plt.plot(ns, [r["str_mult"] for r in results], marker="s", label="Strassen O(n^2.81)")
     plt.xlabel("Matrix size (n)")
-    plt.ylabel("Time (seconds)")
-    plt.title("Traditional vs Strassen Matrix Multiplication")
+    plt.ylabel("Number of multiplications (step count)")
+    plt.title("Step count: multiplications")
     plt.legend()
     plt.grid(True, alpha=0.3)
+
+    plt.subplot(1, 2, 2)
+    plt.plot(ns, [r["traditional_time_sec"] for r in results], marker="o", label="Traditional")
+    plt.plot(ns, [r["strassen_time_sec"] for r in results], marker="s", label="Strassen")
+    plt.xlabel("Matrix size (n)")
+    plt.ylabel("Time (seconds)")
+    plt.title("Running time")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
     plt.tight_layout()
     plt.savefig(filename, dpi=150)
-    print(f"\nGraph saved as {filename}")
+    print(f"Graph saved as {filename}")
+
+
+def run_table():
+    """Menu option 2: step-count table + graph for n = 2, 4, ..., 128."""
+    random.seed(42)  # reproducible results for the report
+    sizes = [2, 4, 8, 16, 32, 64, 128]
+    print("\nComparing Traditional vs Strassen's Matrix Multiplication\n")
+    results = run_comparison(sizes)
+    plot_results(results)
+    all_match = all(r["results_match"] for r in results)
+    print(f"\nAll results matched between the two methods: {all_match}\n")
+
+
+def main():
+    while True:
+        print("=" * 50)
+        print(" Traditional vs Strassen - Matrix Multiplication")
+        print("=" * 50)
+        print("1. Multiply two matrices (random or manual) and compare")
+        print("2. Step/frequency count table for n = 2 to 128")
+        print("3. Exit")
+        choice = input("Choose an option (1-3): ").strip()
+        if choice == "1":
+            compare_one_pair()
+        elif choice == "2":
+            run_table()
+        elif choice == "3":
+            print("Goodbye!")
+            break
+        else:
+            print("Invalid choice, try again.\n")
 
 
 if __name__ == "__main__":
-    random.seed(42)  # reproducible results for the report
+    main()
 
-    # Sizes must be powers of 2. Feel free to extend up to 128 as the
-    # lab suggests, but note Strassen's pure-Python recursion gets
-    # noticeably slower past 128 because of Python's function-call
-    # overhead (a real C/optimized implementation would not show this).
-    sizes = [2, 4, 8, 16, 32, 64, 128]
-
-    print("Comparing Traditional vs Strassen's Matrix Multiplication\n")
-    results = run_comparison(sizes)
-    plot_results(results)
-
-    all_match = all(r["results_match"] for r in results)
-    print("\nConclusion:")
-    print(f"  All results matched between the two methods: {all_match}")
-    print("  Traditional multiplication does O(n^3) multiplications.")
-    print("  Strassen's algorithm does about O(n^2.807) multiplications")
-    print("  by trading 1 multiplication for a handful of extra additions")
-    print("  at every level of recursion. In pure Python, Strassen's real")
-    print("  advantage only starts to show for larger n, because Python's")
-    print("  per-call overhead and the extra add/subtract steps eat into")
-    print("  the theoretical gain for small matrices.")
+# ---------------------------------------------------------------------
+# ANALYSIS / CONCLUSION (Strassen vs Traditional)
+# * Traditional: n^3 multiplications -> O(n^3).
+# * Strassen: T(n) = 7T(n/2) + O(n^2) -> O(n^log2(7)) = O(n^2.807).
+#   Number of multiplications is exactly 7^(log2 n)
+#   (n=128 -> 7^7 = 823,543 versus 128^3 = 2,097,152).
+# * The step-count table shows Strassen always needs FEWER multiplications
+#   and the gap grows as n grows (n=128: about 2.5 times fewer).
+# * BUT Strassen does many more additions/subtractions (n=128: about
+#   4.8 million versus 2.1 million) and makes lots of small matrices and
+#   recursive calls. In pure Python this overhead is bigger than the
+#   saving, so the traditional method is FASTER in real running time for
+#   every size tested (n = 2 to 128). Strassen only wins in time for
+#   much larger matrices, or in a compiled language.
+# * For every test the two methods gave the same result matrix (verified).
+# ---------------------------------------------------------------------
